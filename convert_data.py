@@ -9,17 +9,74 @@ of the same color is treated as a separate instance.
 from __future__ import annotations
 
 import argparse
+import os
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
+from multiprocessing import Pool
+
+
+_COLORS: Dict[Tuple[int, int, int], int] = {}
+_OUT_IMG: Path | None = None
+_OUT_LBL: Path | None = None
+
+
+def _init_worker(colors: Dict[Tuple[int, int, int], int], out_img: str, out_lbl: str) -> None:
+    global _COLORS, _OUT_IMG, _OUT_LBL
+    _COLORS = colors
+    _OUT_IMG = Path(out_img)
+    _OUT_LBL = Path(out_lbl)
+
+
+def _mask_to_instances(mask: np.ndarray, color: Tuple[int, int, int]) -> List[np.ndarray]:
+    target = np.all(mask == np.array(color, dtype=np.uint8), axis=2).astype(np.uint8) * 255
+    contours, _ = cv2.findContours(target, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return contours
+
+
+def _process_one(args: Tuple[str, str, str]) -> int:
+    split, img_path_s, mask_path_s = args
+    img_path = Path(img_path_s)
+    mask_path = Path(mask_path_s)
+
+    img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+    mask = cv2.imread(str(mask_path), cv2.IMREAD_COLOR)
+    if img is None or mask is None:
+        return 0
+
+    h, w = img.shape[:2]
+    lines: List[str] = []
+    for color, cid in _COLORS.items():
+        contours = _mask_to_instances(mask, color)
+        for cnt in contours:
+            if cnt.shape[0] < 3:
+                continue
+            pts = cnt.squeeze(1).astype(float)
+            if pts.ndim != 2 or pts.shape[0] < 3:
+                continue
+            pts[:, 0] /= w
+            pts[:, 1] /= h
+            pts = np.clip(pts, 0.0, 1.0)
+            coords = " ".join([f"{p[0]:.6f} {p[1]:.6f}" for p in pts])
+            lines.append(f"{cid} {coords}")
+
+    assert _OUT_LBL is not None and _OUT_IMG is not None
+    (_OUT_LBL / split / f"{img_path.stem}.txt").write_text("\n".join(lines))
+    out_img_path = _OUT_IMG / split / img_path.name
+    if not out_img_path.exists():
+        cv2.imwrite(str(out_img_path), img)
+    return 1
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--src", default="data/raw/fpic_component/PCBSegClassNet/data/segmentation")
     p.add_argument("--out", default="data/processed/fpic_component", help="Output YOLO directory")
+    p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    p.add_argument("--print-every", type=int, default=200)
     args = p.parse_args()
 
     src_dir = Path(args.src)
@@ -61,41 +118,28 @@ def main() -> int:
 
     colors = {k: i for i, k in enumerate(sorted(colors.keys()))}
 
-    def mask_to_instances(mask: np.ndarray, color: Tuple[int, int, int]) -> List[np.ndarray]:
-        target = np.all(mask == np.array(color, dtype=np.uint8), axis=2).astype(np.uint8) * 255
-        contours, _ = cv2.findContours(target, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        return contours
-
+    items: List[Tuple[str, str, str]] = []
     for split, img_dir, msk_dir in splits:
         for img_path in img_dir.glob("*.png"):
             mask_path = msk_dir / img_path.name
-            if not mask_path.exists():
-                continue
-            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-            mask = cv2.imread(str(mask_path), cv2.IMREAD_COLOR)
-            if img is None or mask is None:
-                continue
-            h, w = img.shape[:2]
+            if mask_path.exists():
+                items.append((split, str(img_path), str(mask_path)))
 
-            lines: List[str] = []
-            for color, cid in colors.items():
-                contours = mask_to_instances(mask, color)
-                for cnt in contours:
-                    if cnt.shape[0] < 3:
-                        continue
-                    pts = cnt.squeeze(1).astype(float)
-                    if pts.ndim != 2 or pts.shape[0] < 3:
-                        continue
-                    pts[:, 0] /= w
-                    pts[:, 1] /= h
-                    pts = np.clip(pts, 0.0, 1.0)
-                    coords = " ".join([f"{p[0]:.6f} {p[1]:.6f}" for p in pts])
-                    lines.append(f"{cid} {coords}")
+    total = len(items)
+    if total == 0:
+        raise RuntimeError("No image-mask pairs found.")
 
-            (out_lbl / split / f"{img_path.stem}.txt").write_text("\n".join(lines))
-            out_img_path = out_img / split / img_path.name
-            if not out_img_path.exists():
-                cv2.imwrite(str(out_img_path), img)
+    print(f"Converting {total} samples with {args.workers} workers...", flush=True)
+    start = time.time()
+    done = 0
+
+    with Pool(processes=args.workers, initializer=_init_worker, initargs=(colors, str(out_img), str(out_lbl))) as pool:
+        for _ in pool.imap_unordered(_process_one, items, chunksize=16):
+            done += 1
+            if done % args.print_every == 0 or done == total:
+                elapsed = time.time() - start
+                rate = done / max(elapsed, 1e-6)
+                print(f"{done}/{total} ({done/total:.1%}) - {rate:.2f} items/s", flush=True)
 
     names = [f"class_{i}" for i in range(len(colors))]
     data_yaml = out_dir / "data.yaml"
