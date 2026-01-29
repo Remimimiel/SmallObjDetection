@@ -1,142 +1,120 @@
 #!/usr/bin/env python3
 """
-Convert polygon annotations to YOLOv8 segmentation TXT format.
+Convert FPIC-Component (PCBSegClassNet) semantic masks to YOLOv8 instance segmentation format.
 
-Each output line: class_id x1 y1 x2 y2 ... (normalized polygon coords)
+Assumption: each unique non-black color in the mask is a class. Each connected component
+of the same color is treated as a separate instance.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from PIL import Image
-
-
-def is_float(s: str) -> bool:
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
-
-
-def parse_line(line: str) -> Tuple[List[float], str]:
-    """
-    Parse a single annotation line and return (coords, class_name).
-    The line is expected to contain polygon coords followed by class name,
-    optionally followed by a numeric flag (e.g., difficulty).
-    """
-    parts = line.strip().split()
-    if len(parts) < 7:
-        raise ValueError("Too few tokens")
-
-    # Find the last non-numeric token as class name
-    class_idx = None
-    for i in range(len(parts) - 1, -1, -1):
-        if not is_float(parts[i]):
-            class_idx = i
-            break
-    if class_idx is None:
-        raise ValueError("No class token found")
-
-    class_name = parts[class_idx]
-    coord_tokens = parts[:class_idx]
-    if len(coord_tokens) % 2 != 0 or len(coord_tokens) < 6:
-        raise ValueError("Invalid coordinate count")
-
-    coords = [float(x) for x in coord_tokens]
-    return coords, class_name
-
-
-def normalize_coords(coords: List[float], w: int, h: int) -> List[float]:
-    norm = []
-    for i, v in enumerate(coords):
-        if i % 2 == 0:
-            norm.append(v / w)
-        else:
-            norm.append(v / h)
-    return norm
+import cv2
+import numpy as np
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--images", default="data/raw/pcbdataset/images", help="Images directory")
-    p.add_argument("--ann", default="data/raw/pcbdataset/annfiles", help="Annotation directory")
-    p.add_argument("--out", default="data/processed/labels", help="Output labels directory")
-    p.add_argument("--classes-out", default="data/processed/classes.txt", help="Class list output")
+    p.add_argument("--src", default="data/raw/fpic_component/PCBSegClassNet/data/segmentation")
+    p.add_argument("--out", default="data/processed/fpic_component", help="Output YOLO directory")
     args = p.parse_args()
 
-    images_dir = Path(args.images)
-    ann_dir = Path(args.ann)
+    src_dir = Path(args.src)
     out_dir = Path(args.out)
-    classes_out = Path(args.classes_out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    classes_out.parent.mkdir(parents=True, exist_ok=True)
+    out_img = out_dir / "images"
+    out_lbl = out_dir / "labels"
+    for split in ["train", "val", "test"]:
+        (out_img / split).mkdir(parents=True, exist_ok=True)
+        (out_lbl / split).mkdir(parents=True, exist_ok=True)
 
-    ann_files = sorted(ann_dir.glob("*.txt"))
-    if not ann_files:
-        print(f"No annotation files found in {ann_dir}")
-        return 1
+    splits = []
+    for split in ["train", "val", "test"]:
+        img_dir = src_dir / split / "images"
+        msk_dir = src_dir / split / "masks"
+        if img_dir.exists() and msk_dir.exists():
+            splits.append((split, img_dir, msk_dir))
 
-    # Collect class names
-    class_names: Dict[str, int] = {}
-    parsed_cache: Dict[Path, List[Tuple[List[float], str]]] = {}
-    for ann in ann_files:
-        lines = ann.read_text().splitlines()
-        parsed = []
-        for line in lines:
-            if not line.strip():
+    if not splits:
+        raise FileNotFoundError(f"No images/masks found under {src_dir}")
+
+    colors: Dict[Tuple[int, int, int], int] = {}
+    for _, _, msk_dir in splits:
+        for msk_path in msk_dir.glob("*.png"):
+            mask = cv2.imread(str(msk_path), cv2.IMREAD_COLOR)
+            if mask is None:
                 continue
-            try:
-                coords, cname = parse_line(line)
-            except ValueError:
+            uniq = np.unique(mask.reshape(-1, 3), axis=0)
+            for bgr in uniq:
+                bgr_t = tuple(int(x) for x in bgr.tolist())
+                if bgr_t == (0, 0, 0):
+                    continue
+                if bgr_t not in colors:
+                    colors[bgr_t] = len(colors)
+        if len(colors) >= 25:
+            break
+
+    if not colors:
+        raise RuntimeError("No class colors found in masks.")
+
+    colors = {k: i for i, k in enumerate(sorted(colors.keys()))}
+
+    def mask_to_instances(mask: np.ndarray, color: Tuple[int, int, int]) -> List[np.ndarray]:
+        target = np.all(mask == np.array(color, dtype=np.uint8), axis=2).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(target, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return contours
+
+    for split, img_dir, msk_dir in splits:
+        for img_path in img_dir.glob("*.png"):
+            mask_path = msk_dir / img_path.name
+            if not mask_path.exists():
                 continue
-            if cname not in class_names:
-                class_names[cname] = len(class_names)
-            parsed.append((coords, cname))
-        parsed_cache[ann] = parsed
+            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+            mask = cv2.imread(str(mask_path), cv2.IMREAD_COLOR)
+            if img is None or mask is None:
+                continue
+            h, w = img.shape[:2]
 
-    # Write class list
-    classes_out.write_text("\n".join([k for k, _ in sorted(class_names.items(), key=lambda x: x[1])]))
+            lines: List[str] = []
+            for color, cid in colors.items():
+                contours = mask_to_instances(mask, color)
+                for cnt in contours:
+                    if cnt.shape[0] < 3:
+                        continue
+                    pts = cnt.squeeze(1).astype(float)
+                    if pts.ndim != 2 or pts.shape[0] < 3:
+                        continue
+                    pts[:, 0] /= w
+                    pts[:, 1] /= h
+                    pts = np.clip(pts, 0.0, 1.0)
+                    coords = " ".join([f"{p[0]:.6f} {p[1]:.6f}" for p in pts])
+                    lines.append(f"{cid} {coords}")
 
-    # Convert annotations
-    converted = 0
-    for ann, items in parsed_cache.items():
-        if not items:
-            continue
-        stem = ann.stem
-        # Find corresponding image (png/jpg/jpeg)
-        img_path = None
-        for ext in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"):
-            cand = images_dir / f"{stem}{ext}"
-            if cand.exists():
-                img_path = cand
-                break
-        if img_path is None:
-            continue
+            (out_lbl / split / f"{img_path.stem}.txt").write_text("\n".join(lines))
+            out_img_path = out_img / split / img_path.name
+            if not out_img_path.exists():
+                cv2.imwrite(str(out_img_path), img)
 
-        with Image.open(img_path) as im:
-            w, h = im.size
+    names = [f"class_{i}" for i in range(len(colors))]
+    data_yaml = out_dir / "data.yaml"
+    data_yaml.write_text(
+        "\n".join(
+            [
+                f"path: {out_dir.resolve()}",
+                "train: images/train",
+                "val: images/val",
+                "test: images/test",
+                f"nc: {len(names)}",
+                f"names: {names}",
+            ]
+        )
+        + "\n"
+    )
 
-        lines_out: List[str] = []
-        for coords, cname in items:
-            norm = normalize_coords(coords, w, h)
-            # Clamp to [0,1] for safety
-            norm = [min(1.0, max(0.0, v)) for v in norm]
-            cid = class_names[cname]
-            line = " ".join([str(cid)] + [f"{v:.6f}" for v in norm])
-            lines_out.append(line)
-
-        out_path = out_dir / f"{stem}.txt"
-        out_path.write_text("\n".join(lines_out))
-        converted += 1
-
-    print(f"Converted {converted} files. Classes: {len(class_names)}")
-    print(f"Labels: {out_dir}")
-    print(f"Classes: {classes_out}")
+    print(f"YOLO dataset ready: {out_dir}")
+    print(f"Data YAML: {data_yaml}")
     return 0
 
 

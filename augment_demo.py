@@ -39,8 +39,8 @@ def load_image_with_many_targets(images_dir: Path, ann_dir: Path, min_targets: i
 
 
 def main() -> int:
-    images_dir = Path("data/raw/pcbdataset/images")
-    ann_dir = Path("data/raw/pcbdataset/annfiles")
+    images_dir = Path("data/processed/fpic_component/images/train")
+    ann_dir = Path("data/processed/fpic_component/labels/train")
     out_path = Path("figures/chapter3/augmentation_demo.png")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

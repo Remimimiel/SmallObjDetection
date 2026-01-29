@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Download a small metal fastener dataset from Kaggle or OpenML.
+Download datasets for the project.
 
 Examples:
-  python scripts/download_dataset.py --source kaggle
+  python scripts/download_dataset.py --source datasetninja --dataset FPIC-Component
   python scripts/download_dataset.py --source kaggle --kaggle yartinz/npu-bolt
   python scripts/download_dataset.py --source openml --openml-id 12345
-  python scripts/download_dataset.py --source auto
 """
 
 from __future__ import annotations
@@ -31,6 +30,8 @@ DEFAULT_KAGGLE_DATASETS = [
 
 OPENML_LIST_URL = "https://www.openml.org/api/v1/json/data/list"
 OPENML_DOWNLOAD_URL = "https://www.openml.org/data/v1/download/{did}"
+DEFAULT_DATASETNINJA = "FPIC-Component"
+FPIC_KAGGLE_SLUG = "aditidankar/pcbsegclassnet"
 
 
 def _run(cmd: List[str]) -> int:
@@ -53,6 +54,35 @@ def kaggle_download(slug: str, out_dir: Path) -> bool:
     cmd = ["kaggle", "datasets", "download", "-d", slug, "-p", str(out_dir), "--unzip"]
     print(f"Running: {' '.join(cmd)}")
     return _run(cmd) == 0
+
+
+def datasetninja_download(dataset: str, out_dir: Path) -> bool:
+    try:
+        import dataset_tools as dtools
+    except ImportError:
+        print(
+            "ERROR: dataset-tools not found. Install with `pip install --upgrade dataset-tools`.",
+            file=sys.stderr,
+        )
+        return False
+
+    ensure_dir(out_dir)
+    try:
+        print(f"Downloading DatasetNinja dataset: {dataset}")
+        dtools.download(dataset=dataset, dst_dir=str(out_dir))
+    except Exception as exc:
+        print(f"ERROR: dataset-tools download failed: {exc}", file=sys.stderr)
+        return False
+    # Some DatasetNinja links resolve to HTML (e.g., Dropbox page). Detect and fail fast.
+    for cand in out_dir.glob("*.tar"):
+        try:
+            head = cand.read_text(errors="ignore")[:200]
+        except Exception:
+            continue
+        if "<html" in head.lower():
+            print(f"ERROR: {cand.name} looks like HTML, not a dataset archive.", file=sys.stderr)
+            return False
+    return True
 
 
 def openml_search(query: str) -> List[Tuple[str, str]]:
@@ -89,7 +119,12 @@ def openml_download(did: str, out_dir: Path) -> bool:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Download a metal fastener dataset.")
-    p.add_argument("--source", choices=["kaggle", "openml", "auto"], default="auto")
+    p.add_argument(
+        "--source",
+        choices=["datasetninja", "kaggle", "openml", "auto"],
+        default="auto",
+    )
+    p.add_argument("--dataset", default=DEFAULT_DATASETNINJA, help="DatasetNinja dataset name")
     p.add_argument("--kaggle", help="Kaggle dataset slug, e.g. yartinz/npu-bolt")
     p.add_argument("--openml-id", help="OpenML dataset id (did)")
     p.add_argument("--openml-query", default="screw bolt nut fastener")
@@ -100,6 +135,21 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     out_dir = Path(args.out)
+
+    if args.source in ("datasetninja", "auto"):
+        dataset = args.dataset or DEFAULT_DATASETNINJA
+        if datasetninja_download(dataset, out_dir):
+            print(f"Downloaded DatasetNinja dataset: {dataset}")
+            return 0
+        if args.source == "datasetninja":
+            return 2
+
+        # Fall back to Kaggle for FPIC-Component
+        if dataset.lower() == DEFAULT_DATASETNINJA.lower():
+            print(f"Falling back to Kaggle dataset: {FPIC_KAGGLE_SLUG}")
+            if kaggle_download(FPIC_KAGGLE_SLUG, out_dir / "fpic_component"):
+                print(f"Downloaded Kaggle dataset: {FPIC_KAGGLE_SLUG}")
+                return 0
 
     if args.source in ("kaggle", "auto"):
         slugs = [args.kaggle] if args.kaggle else list(DEFAULT_KAGGLE_DATASETS)

@@ -1,102 +1,30 @@
 #!/usr/bin/env python3
 """
-Train YOLOv8s-seg on the prepared dataset (MPS), validate, and run inference.
+Train YOLOv8n-seg on the prepared dataset (MPS), validate, and run inference.
 Produces confusion matrix and PR curve in runs/segment/train and saves
 an example prediction as detection_result.png.
 """
 
 from __future__ import annotations
 
-import random
 import sys
 from pathlib import Path
 import cv2
-import yaml
 from ultralytics import YOLO
 
 
 ROOT = Path(".")
-RAW_IMAGES = ROOT / "data/raw/pcbdataset/images"
-RAW_ANN = ROOT / "data/raw/pcbdataset/annfiles"
-LABELS_FLAT = ROOT / "data/processed/labels"
-PROCESSED = ROOT / "data/processed"
-SEG_ROOT = PROCESSED / "seg"
-DATA_YAML = SEG_ROOT / "data.yaml"
-IMAGES_TRAIN = SEG_ROOT / "images/train"
-IMAGES_VAL = SEG_ROOT / "images/val"
-LABELS_TRAIN = SEG_ROOT / "labels/train"
-LABELS_VAL = SEG_ROOT / "labels/val"
-CLASSES_TXT = PROCESSED / "classes.txt"
+DATASET_ROOT = ROOT / "data/processed/fpic_component"
+DATA_YAML = DATASET_ROOT / "data.yaml"
+IMAGES_VAL = DATASET_ROOT / "images/val"
+LABELS_VAL = DATASET_ROOT / "labels/val"
 
 
-def ensure_dirs() -> None:
-    IMAGES_TRAIN.mkdir(parents=True, exist_ok=True)
-    IMAGES_VAL.mkdir(parents=True, exist_ok=True)
-    LABELS_TRAIN.mkdir(parents=True, exist_ok=True)
-    LABELS_VAL.mkdir(parents=True, exist_ok=True)
-
-
-def symlink_or_copy(src: Path, dst: Path) -> None:
-    if dst.exists():
-        return
-    try:
-        dst.symlink_to(src.resolve())
-    except OSError:
-        # Fallback to copy if symlink not permitted
-        dst.write_bytes(src.read_bytes())
-
-
-def clear_dir(dir_path: Path) -> None:
-    if not dir_path.exists():
-        return
-    for p in dir_path.iterdir():
-        if p.is_file() or p.is_symlink():
-            p.unlink()
-
-
-def prepare_split(val_ratio: float = 0.2, seed: int = 42) -> None:
-    if not RAW_IMAGES.exists() or not LABELS_FLAT.exists():
-        raise FileNotFoundError("Missing images or labels. Run convert_data.py first.")
-    ensure_dirs()
-    clear_dir(IMAGES_TRAIN)
-    clear_dir(IMAGES_VAL)
-    clear_dir(LABELS_TRAIN)
-    clear_dir(LABELS_VAL)
-
-    images = sorted([p for p in RAW_IMAGES.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
-    if not images:
-        raise FileNotFoundError(f"No images found in {RAW_IMAGES}")
-
-    random.seed(seed)
-    random.shuffle(images)
-    val_count = max(1, int(len(images) * val_ratio))
-    val_set = set(images[:val_count])
-
-    for img in images:
-        target_img_dir = IMAGES_VAL if img in val_set else IMAGES_TRAIN
-        target_lbl_dir = LABELS_VAL if img in val_set else LABELS_TRAIN
-        symlink_or_copy(img, target_img_dir / img.name)
-
-        lbl = LABELS_FLAT / f"{img.stem}.txt"
-        if lbl.exists():
-            symlink_or_copy(lbl, target_lbl_dir / lbl.name)
-
-
-def ensure_data_yaml() -> None:
-    if DATA_YAML.exists():
-        return
-    if not CLASSES_TXT.exists():
-        raise FileNotFoundError("Missing classes.txt. Run convert_data.py first.")
-
-    names = [ln.strip() for ln in CLASSES_TXT.read_text().splitlines() if ln.strip()]
-    data = {
-        "path": str(SEG_ROOT.resolve()),
-        "train": "images/train",
-        "val": "images/val",
-        "names": names,
-    }
-    DATA_YAML.parent.mkdir(parents=True, exist_ok=True)
-    DATA_YAML.write_text(yaml.safe_dump(data, sort_keys=False))
+def ensure_dataset() -> None:
+    if not DATA_YAML.exists():
+        raise FileNotFoundError(f"Missing dataset yaml: {DATA_YAML}")
+    if not IMAGES_VAL.exists() or not LABELS_VAL.exists():
+        raise FileNotFoundError("Dataset structure incomplete under data/processed/fpic_component")
 
 
 def main() -> int:
@@ -107,25 +35,16 @@ def main() -> int:
     except Exception:
         pass
 
-    prepare_split()
-    ensure_data_yaml()
-    # Remove stale cache to avoid broken symlink references
-    for cache in [
-        SEG_ROOT / "labels/train.cache",
-        SEG_ROOT / "labels/val.cache",
-    ]:
-        if cache.exists():
-            cache.unlink()
+    ensure_dataset()
 
-    # More stable segmentation model for better curves
-    model = YOLO("yolov8s-seg.pt")
+    model = YOLO("yolov8n-seg.pt")
 
     project_dir = (ROOT / "runs/segment").resolve()
 
     print("Starting YOLOv8 training...", flush=True)
     model.train(
         data=str(DATA_YAML),
-        epochs=100,
+        epochs=50,
         imgsz=640,
         batch=4,
         device="mps",
@@ -174,7 +93,7 @@ def main() -> int:
         conf=0.01,
     )
     if results:
-        plotted = results[0].plot()
+        plotted = results[0].plot(boxes=True, masks=True)
         cv2.imwrite("detection_result.png", plotted)
         print("Saved: detection_result.png")
 
