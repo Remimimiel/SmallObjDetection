@@ -1,0 +1,8 @@
+data/
+runs/
+previews/
+__pycache__/
+*.zip
+*.pt
+*.jpg
+*.png
