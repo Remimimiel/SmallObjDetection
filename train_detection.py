@@ -52,6 +52,7 @@ def main() -> int:
         imgsz=640,
         batch=4,
         device=device,
+        amp=False,
         project=str(project_dir),
         name="train",
         exist_ok=True,
