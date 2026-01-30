@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import cv2
+import torch
 from ultralytics import YOLO
 
 
@@ -42,12 +43,15 @@ def main() -> int:
     project_dir = (ROOT / "runs/segment").resolve()
 
     print("Starting YOLOv8 training...", flush=True)
+    # Auto-select device: cuda > mps > cpu
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+
     model.train(
         data=str(DATA_YAML),
         epochs=50,
         imgsz=640,
         batch=4,
-        device="mps",
+        device=device,
         project=str(project_dir),
         name="train",
         exist_ok=True,
@@ -61,7 +65,7 @@ def main() -> int:
     model.val(
         data=str(DATA_YAML),
         imgsz=640,
-        device="mps",
+        device=device,
         plots=True,
         project=str(project_dir),
         name="train",
@@ -88,7 +92,7 @@ def main() -> int:
 
     results = model.predict(
         source=str(test_img),
-        device="mps",
+        device=device,
         save=False,
         conf=0.01,
     )
