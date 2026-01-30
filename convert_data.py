@@ -97,7 +97,9 @@ def main() -> int:
     if not splits:
         raise FileNotFoundError(f"No images/masks found under {src_dir}")
 
+    print("Scanning masks to build color map...", flush=True)
     colors: Dict[Tuple[int, int, int], int] = {}
+    scanned = 0
     for _, _, msk_dir in splits:
         for msk_path in msk_dir.glob("*.png"):
             mask = cv2.imread(str(msk_path), cv2.IMREAD_COLOR)
@@ -110,6 +112,9 @@ def main() -> int:
                     continue
                 if bgr_t not in colors:
                     colors[bgr_t] = len(colors)
+            scanned += 1
+            if scanned % 200 == 0:
+                print(f"  scanned {scanned} masks, classes so far: {len(colors)}", flush=True)
         if len(colors) >= 25:
             break
 
@@ -118,12 +123,14 @@ def main() -> int:
 
     colors = {k: i for i, k in enumerate(sorted(colors.keys()))}
 
+    print("Building image-mask pair list...", flush=True)
     items: List[Tuple[str, str, str]] = []
     for split, img_dir, msk_dir in splits:
         for img_path in img_dir.glob("*.png"):
             mask_path = msk_dir / img_path.name
             if mask_path.exists():
                 items.append((split, str(img_path), str(mask_path)))
+        print(f"  {split}: {len(items)} pairs so far", flush=True)
 
     total = len(items)
     if total == 0:
