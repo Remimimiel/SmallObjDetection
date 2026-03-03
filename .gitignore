@@ -1,8 +1,10 @@
 data/
 runs/
+result/
 previews/
 __pycache__/
 *.zip
 *.pt
 *.jpg
 *.png
+.DS_Store
