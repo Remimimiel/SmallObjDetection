@@ -16,14 +16,14 @@ echo "[2/6] Sanity train (5 epochs)..."
 yolo segment train \
   model=yolov8n-seg.pt \
   data=data/processed/fpic_component/data.yaml \
-  epochs=5 imgsz=640 batch=4 device=0 seed=42 cos_lr=True \
+  epochs=5 imgsz=640 batch=4 device=0 seed=42 cos_lr=True amp=False \
   project=result/segment name=sanity_n_5e exist_ok=True
 
 echo "[3/6] Baseline train (50 epochs)..."
 yolo segment train \
   model=yolov8n-seg.pt \
   data=data/processed/fpic_component/data.yaml \
-  epochs=50 imgsz=640 batch=4 device=0 seed=42 cos_lr=True \
+  epochs=50 imgsz=640 batch=4 device=0 seed=42 cos_lr=True amp=False \
   project=result/segment name=baseline_n_50e exist_ok=True
 
 echo "[4/6] Evaluate baseline on val/test..."
