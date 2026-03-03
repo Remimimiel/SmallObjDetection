@@ -1,0 +1,3 @@
+experiment,best_epoch,precision_B,recall_B,map50_B,map5095_B,precision_M,recall_M,map50_M,map5095_M
+strong_n_100e,92,0.80802,0.7709,0.82716,0.66839,0.8093,0.76673,0.82441,0.60336
+strong_s_80e,66,0.90433,0.86658,0.92412,0.77336,0.89935,0.86108,0.91573,0.66917
