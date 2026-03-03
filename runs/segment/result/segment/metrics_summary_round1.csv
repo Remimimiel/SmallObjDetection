@@ -1,0 +1,2 @@
+experiment,best_epoch,precision_B,recall_B,map50_B,map5095_B,precision_M,recall_M,map50_M,map5095_M
+baseline_n_50e,44,0.78121,0.74664,0.78647,0.63278,0.83816,0.71312,0.78204,0.55621
