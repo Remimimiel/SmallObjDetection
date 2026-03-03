@@ -40,11 +40,11 @@ yolo segment val \
   data=data/processed/fpic_component/data.yaml split=test device=0 \
   project="$PROJECT_DIR" name=strong_n_100e_test exist_ok=True
 
-echo "[5/6] Summarize metrics (round1 + round2)..."
+echo "[5/6] Summarize metrics (round2)..."
 python scripts/collect_metrics.py \
   --project "$PROJECT_DIR" \
-  --experiments baseline_n_50e strong_n_100e \
-  --out "$PROJECT_DIR/metrics_summary_round1_round2.csv"
+  --experiments strong_n_100e \
+  --out "$PROJECT_DIR/metrics_summary_round2.csv"
 
 echo "[6/6] Round2 done."
 echo "Keep these files for analysis:"
@@ -52,4 +52,4 @@ echo "  - $PROJECT_DIR/strong_n_100e/results.csv"
 echo "  - $PROJECT_DIR/strong_n_100e/args.yaml"
 echo "  - $PROJECT_DIR/strong_n_100e/weights/best.pt"
 echo "  - $PROJECT_DIR/strong_n_100e_val/* and $PROJECT_DIR/strong_n_100e_test/*"
-echo "  - $PROJECT_DIR/metrics_summary_round1_round2.csv"
+echo "  - $PROJECT_DIR/metrics_summary_round2.csv"
